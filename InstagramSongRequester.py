@@ -24,7 +24,9 @@ BOT_ACTIVE = True
 SESSION_FILE = "session.json"
 
 # ========== DATABASE ==========
-conn = sqlite3.connect('cooldown.db')
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cooldown.db")
+conn = sqlite3.connect(DB_PATH)
+
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS cooldowns (user TEXT PRIMARY KEY, last_time TEXT)''')
 c.execute('''CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)''')
