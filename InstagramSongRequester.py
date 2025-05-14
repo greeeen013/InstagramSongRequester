@@ -21,41 +21,33 @@ ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 
 DEFAULT_COOLDOWN = 60  # minut
 BOT_ACTIVE = True
-last_message_id = None
 
-# Inicializace databáze
+# Připojení k databázi
 conn = sqlite3.connect('cooldown.db')
 c = conn.cursor()
-c.execute('''CREATE TABLE IF NOT EXISTS cooldowns (user TEXT PRIMARY KEY, last_time TEXT)''')
+
+# Tabulka pro cooldown
+c.execute('''CREATE TABLE IF NOT EXISTS cooldowns (
+    user TEXT PRIMARY KEY,
+    last_time TEXT
+)''')
+
+# Tabulka pro stav (poslední zpracované message ID)
+c.execute('''CREATE TABLE IF NOT EXISTS state (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)''')
 conn.commit()
 
-# Instagram přihlášení
-cl = Client()
-print("[DEBUG] Přihlašuji se k Instagramu...")
-cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+# Pomocné SQLite funkce
+def get_last_message_id():
+    c.execute("SELECT value FROM state WHERE key = 'last_message_id'")
+    row = c.fetchone()
+    return row[0] if row else None
 
-# Spotify přihlášení
-print("[DEBUG] Přihlašuji se k Spotify...")
-sp = Spotify(auth_manager=SpotifyOAuth(
-    client_id=SPOTIFY_CLIENT_ID,
-    client_secret=SPOTIFY_CLIENT_SECRET,
-    redirect_uri=SPOTIFY_REDIRECT_URI,
-    scope="user-modify-playback-state user-read-playback-state"
-))
-
-# Načtení threadu a mapování uživatelů
-try:
-    thread = cl.direct_thread(GROUP_THREAD_ID)
-    user_map = {u.pk: u.username for u in thread.users}
-    print("[DEBUG] Načteno", len(user_map), "uživatelů ve vlákně.")
-except Exception as e:
-    print(f"⛔ Chyba při načítání threadu: {e}")
-    user_map = {}
-
-# Pomocné funkce
-def extract_spotify_link(text):
-    match = re.search(r'(https?://open\.spotify\.com/track/\S+)', text)
-    return match.group(1) if match else None
+def set_last_message_id(message_id):
+    c.execute("REPLACE INTO state (key, value) VALUES (?, ?)", ('last_message_id', message_id))
+    conn.commit()
 
 def can_post(user):
     c.execute("SELECT last_time FROM cooldowns WHERE user=?", (user,))
@@ -69,9 +61,13 @@ def can_post(user):
     return elapsed >= timedelta(minutes=DEFAULT_COOLDOWN)
 
 def update_post_time(user):
-    print(f"[DEBUG] Aktualizuji čas poslední zprávy pro {user}")
+    print(f"[DEBUG] Aktualizuji cooldown pro {user}")
     c.execute("REPLACE INTO cooldowns (user, last_time) VALUES (?, ?)", (user, datetime.now().isoformat()))
     conn.commit()
+
+def extract_spotify_link(text):
+    match = re.search(r'(https?://open\.spotify\.com/track/\S+)', text)
+    return match.group(1) if match else None
 
 def add_to_queue(link):
     track_id = link.split("/")[-1].split("?")[0]
@@ -82,7 +78,7 @@ def add_to_queue(link):
 def handle_admin_command(msg, username):
     global BOT_ACTIVE, DEFAULT_COOLDOWN
     text = msg.text.lower()
-    print(f"[DEBUG] Zpracovávám admin příkaz: {text}")
+    print(f"[DEBUG] Admin příkaz od {username}: {text}")
 
     if "stop" in text:
         BOT_ACTIVE = False
@@ -98,9 +94,32 @@ def handle_admin_command(msg, username):
         except:
             cl.direct_send("❌ Neplatný formát cooldownu.", [msg.user_id])
 
-# Hlavní smyčka
+# Přihlášení do Instagramu
+cl = Client()
+print("[DEBUG] Přihlašuji se k Instagramu...")
+cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+
+# Přihlášení do Spotify
+print("[DEBUG] Přihlašuji se k Spotify...")
+sp = Spotify(auth_manager=SpotifyOAuth(
+    client_id=SPOTIFY_CLIENT_ID,
+    client_secret=SPOTIFY_CLIENT_SECRET,
+    redirect_uri=SPOTIFY_REDIRECT_URI,
+    scope="user-modify-playback-state user-read-playback-state"
+))
+
+# Načtení uživatelů ve vlákně
+try:
+    thread = cl.direct_thread(GROUP_THREAD_ID)
+    user_map = {u.pk: u.username for u in thread.users}
+    print("[DEBUG] Načteno", len(user_map), "uživatelů.")
+except Exception as e:
+    print(f"⛔ Chyba při načítání vláka: {e}")
+    user_map = {}
+
 print("🚀 Bot je aktivní a naslouchá...")
 
+# Hlavní smyčka
 while True:
     try:
         messages = cl.direct_messages(thread_id=GROUP_THREAD_ID, amount=1)
@@ -110,18 +129,19 @@ while True:
 
         msg = messages[0]
 
-        # Kontrola, zda je zpráva nová
-        if msg.id == last_message_id:
-            print("[DEBUG] Nepřišla žádná nová zpráva.")
+        # Kontrola duplikace
+        last_msg_id = get_last_message_id()
+        if msg.id == last_msg_id:
+            print("[DEBUG] Žádná nová zpráva.")
             time.sleep(5)
             continue
 
-        last_message_id = msg.id  # Uložit ID zprávy
+        set_last_message_id(msg.id)  # Aktualizace ID zprávy
 
         user_id = msg.user_id
         username = user_map.get(user_id, str(user_id))
         text = msg.text or ""
-        print(f"[DEBUG] Nová zpráva od {username}: {text}")
+        print(f"[DEBUG] Zpráva od {username}: {text}")
 
         # Admin příkazy
         if username == ADMIN_USERNAME and any(cmd in text.lower() for cmd in ["start", "stop", "set cooldown"]):
@@ -134,7 +154,7 @@ while True:
 
         link = extract_spotify_link(text)
         if not link:
-            print("[DEBUG] Zpráva neobsahuje Spotify odkaz.")
+            print("[DEBUG] Žádný Spotify odkaz.")
             continue
 
         if can_post(username):
@@ -142,10 +162,10 @@ while True:
                 add_to_queue(link)
                 update_post_time(username)
                 cl.direct_like_message(msg.id)
-                print("[DEBUG] ✅ Skladba úspěšně přidána.")
+                print("[DEBUG] ✅ Skladba přidána.")
             except Exception as e:
-                print(f"❌ Chyba při přidávání do fronty: {e}")
-                cl.direct_send("❌ Chyba při přidávání do fronty.", [user_id])
+                print(f"❌ Chyba při přidání: {e}")
+                cl.direct_send("❌ Chyba při přidání do fronty.", [user_id])
         else:
             cl.direct_send("🕒 Cooldown ještě nevypršel.", [user_id])
 
