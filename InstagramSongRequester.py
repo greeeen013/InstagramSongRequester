@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from instagrapi import Client
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
+import json
 
 # Načtení .env proměnných
 load_dotenv()
@@ -96,8 +97,29 @@ def handle_admin_command(msg, username):
 
 # Přihlášení do Instagramu
 cl = Client()
-print("[DEBUG] Přihlašuji se k Instagramu...")
-cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+SESSION_FILE = "session.json"
+
+def save_session():
+    with open(SESSION_FILE, "w") as f:
+        json.dump(cl.get_settings(), f)
+    print("[DEBUG] Session uložena.")
+
+def load_session():
+    with open(SESSION_FILE, "r") as f:
+        cl.set_settings(json.load(f))
+    print("[DEBUG] Session načtena ze souboru.")
+
+# Pokus o načtení session
+try:
+    if os.path.exists(SESSION_FILE):
+        load_session()
+        cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+    else:
+        raise FileNotFoundError
+except Exception as e:
+    print(f"[DEBUG] Nepodařilo se načíst session ({e}), přihlašuji ručně...")
+    cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+    save_session()
 
 # Přihlášení do Spotify
 print("[DEBUG] Přihlašuji se k Spotify...")
