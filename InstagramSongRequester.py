@@ -163,7 +163,7 @@ while True:
             try:
                 add_to_queue(link)
                 update_post_time(username)
-                cl.direct_like_message(msg.id)
+                cl.direct_send(f"@{username}: ✅ Přidáno do fronty.", thread_ids=[GROUP_THREAD_ID])
                 print(f"[DEBUG] ✅ Přidána skladba od @{username}")
             except Exception as e:
                 cl.direct_send(f"@{username}: ❌ Chyba při přidávání do fronty.", thread_ids=[GROUP_THREAD_ID])
