@@ -76,10 +76,13 @@ try:
         load_session()
         cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
     else:
-        raise FileNotFoundError
+        cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+        save_session()
 except Exception:
     cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
     save_session()
+
+BOT_USER_ID = cl.user_id
 
 # ========== SPOTIFY LOGIN ==========
 sp = Spotify(auth_manager=SpotifyOAuth(
@@ -134,6 +137,12 @@ while True:
             continue
 
         msg = messages[0]
+
+        if msg.user_id == BOT_USER_ID:
+            print("[DEBUG] Zpráva od bota – ignorováno.")
+            time.sleep(2)
+            continue
+
         last_id = get_last_message_id()
         if msg.id == last_id:
             time.sleep(5)
