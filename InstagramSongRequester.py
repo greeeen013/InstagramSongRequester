@@ -19,12 +19,12 @@ SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI")
 GROUP_THREAD_ID = os.getenv("GROUP_THREAD_ID")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME")
 
-DEFAULT_COOLDOWN = 60
+DEFAULT_COOLDOWN = 20
 BOT_ACTIVE = True
 SESSION_FILE = "session.json"
 
 # ========== DATABASE ==========
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cooldown.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cooldown.sqlite3")
 conn = sqlite3.connect(DB_PATH)
 
 c = conn.cursor()
@@ -107,6 +107,16 @@ def extract_spotify_link(text):
     match = re.search(r'(https?://open\.spotify\.com/track/\S+)', text)
     return match.group(1) if match else None
 
+def reconstruct_spotify_link(text):
+    pattern = r'(open\.spotify\.com/track/\S+)'
+    match = re.search(pattern, text)
+    if not match:
+        return None
+    url = match.group(1)
+    if not url.startswith("https://"):
+        return "https://" + url
+    return url
+
 def add_to_queue(link):
     track_id = link.split("/")[-1].split("?")[0]
     sp.add_to_queue(f"spotify:track:{track_id}")
@@ -135,7 +145,7 @@ while True:
     try:
         messages = cl.direct_messages(thread_id=GROUP_THREAD_ID, amount=1)
         if not messages:
-            time.sleep(5)
+            time.sleep(2)
             continue
 
         msg = messages[0]
@@ -147,7 +157,7 @@ while True:
 
         last_id = get_last_message_id()
         if msg.id == last_id:
-            time.sleep(5)
+            time.sleep(2)
             continue
 
         set_last_message_id(msg.id)
@@ -158,6 +168,17 @@ while True:
 
         print(f"[DEBUG] Zpráva od @{username}: {text}")
 
+        # NEW: upozornění pro sdílenou hudbu
+        if msg.item_type == "music":
+            cl.direct_send(
+                f"@{username}: 🎵 Zpráva vypadá jako sdílená hudba. "
+                "Pokud odkaz nejde, zkus odmazat něco před `open.spotify.com/...` a pošli znovu.",
+                thread_ids=[GROUP_THREAD_ID]
+            )
+            print("[DEBUG] Detekován typ music – upozornění odesláno.")
+            time.sleep(2)
+            continue
+
         if username == ADMIN_USERNAME and any(cmd in text.lower() for cmd in ["start", "stop", "set cooldown"]):
             handle_admin_command(msg, username)
             continue
@@ -167,6 +188,13 @@ while True:
             continue
 
         link = extract_spotify_link(text)
+
+        # NEW: fallback - zkus opravit neúplný odkaz
+        if not link and "open.spotify.com" in text.lower():
+            link = reconstruct_spotify_link(text)
+            if link:
+                print(f"[DEBUG] Rekonstruovaný odkaz: {link}")
+
         if not link:
             continue
 
@@ -177,7 +205,14 @@ while True:
                 cl.direct_send(f"@{username}: ✅ Přidáno do fronty.", thread_ids=[GROUP_THREAD_ID])
                 print(f"[DEBUG] ✅ Přidána skladba od @{username}")
             except Exception as e:
-                cl.direct_send(f"@{username}: ❌ Chyba při přidávání do fronty.", thread_ids=[GROUP_THREAD_ID])
+                error_text = str(e)
+                if "No active device found" in error_text:
+                    cl.direct_send(
+                        f"@{username}: ⚠️ Nemáš zapnutý přehrávač Spotify. Spusť ho prosím a pusť si něco.",
+                        thread_ids=[GROUP_THREAD_ID]
+                    )
+                else:
+                    cl.direct_send(f"@{username}: ❌ Chyba při přidávání do fronty.", thread_ids=[GROUP_THREAD_ID])
                 print(f"[ERROR] {e}")
         else:
             mins = minutes_remaining(username)
@@ -186,4 +221,4 @@ while True:
     except Exception as e:
         print(f"[ERROR] Globální chyba: {e}")
 
-    time.sleep(5)
+    time.sleep(2)
