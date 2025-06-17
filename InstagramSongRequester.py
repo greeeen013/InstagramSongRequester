@@ -112,12 +112,17 @@ if not token:
 sp = Spotify(auth_manager=auth_manager)
 
 # ========== USER MAP ==========
-try:
-    thread = cl.direct_thread(GROUP_THREAD_ID)
-    user_map = {u.pk: u.username for u in thread.users}
-except Exception as e:
-    print(f"[ERROR] Nepodařilo se načíst thread: {e}")
-    user_map = {}
+def get_username(user_id):
+    """Získání uživatelského jména s fallback na ID"""
+    try:
+        # Zkusíme načíst aktuální informace o threadu
+        thread = cl.direct_thread(GROUP_THREAD_ID)
+        # Aktualizujeme mapu uživatelů
+        user_map = {u.pk: u.username for u in thread.users}
+        return user_map.get(user_id, f"@{user_id}")
+    except Exception as e:
+        print(f"[ERROR] Chyba při načítání uživatelů: {e}")
+        return f"@{user_id}"
 
 # ========== UTIL ==========
 def extract_spotify_link(text):
@@ -180,7 +185,7 @@ while True:
         set_last_message_id(msg.id)
 
         user_id = msg.user_id
-        username = user_map.get(user_id, str(user_id))
+        username = get_username(msg.user_id)
         text = msg.text or ""
 
         print(f"[DEBUG] Zpráva od @{username}: {text}")
