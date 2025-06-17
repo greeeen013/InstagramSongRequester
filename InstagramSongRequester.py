@@ -73,27 +73,39 @@ def update_post_time(user):
 def create_instagram_client():
     cl = Client()
 
-    # Konfigurace retry strategie
-    retry_strategy = Retry(
-        total=3,
-        backoff_factor=1,
-        status_forcelist=[500, 502, 503, 504]
-    )
-    adapter = HTTPAdapter(max_retries=retry_strategy)
-    cl.session.mount("https://", adapter)
-    cl.session.mount("http://", adapter)
+    # Konfigurace pro Raspberry Pi
+    cl.delay_range = [2, 5]  # Větší rozptyl mezi požadavky
+    cl.request_timeout = 30  # Delší timeout
 
-    # Nastavení timeout a delay
-    cl.request_timeout = 60
-    cl.delay_range = [2, 5]
+    # Nastavení user agent (důležité pro Raspberry Pi)
+    cl.set_user_agent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
-    # Specifické pro Raspberry Pi
-    cl.set_proxy(None)  # Explicitně vypnout proxy
-    cl.set_connect_timeout(30)
+    # Vypnutí některých funkcí pro stabilitu
+    cl.set_locale("en_US")
+    cl.set_country("US")
+    cl.set_country_code(1)
+    cl.set_timezone_offset(0)
 
-    # Zkuste alternativní DNS
-    socket.setdefaulttimeout(30)
-    requests.packages.urllib3.util.connection.HAS_IPV6 = False
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(SESSION_FILE):
+                with open(SESSION_FILE, "r") as f:
+                    session_settings = json.load(f)
+                cl.set_settings(session_settings)
+                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            else:
+                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+                save_session(cl)
+            return cl
+        except Exception as e:
+            print(f"Pokus {attempt + 1} selhal: {str(e)}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(10 * (attempt + 1))  # Exponenciální backoff
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
 
 
 def save_session(client):
