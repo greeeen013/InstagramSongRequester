@@ -92,16 +92,24 @@ auth_manager = SpotifyOAuth(
     client_secret=SPOTIFY_CLIENT_SECRET,
     redirect_uri=SPOTIFY_REDIRECT_URI,
     scope="user-modify-playback-state user-read-playback-state",
-    open_browser=False
+    open_browser=False,
+    cache_path=".spotify_token_cache"  # Soubor pro ukládání tokenu
 )
 
-# Získání URL pro autorizaci
-auth_url = auth_manager.get_authorize_url()
-print(f"Prosím otevřete tento odkaz v prohlížeči: {auth_url}")
+# Zkusíme získat platný token z cache
+token = auth_manager.get_cached_token()
 
-# Po ověření získáte token
-token = auth_manager.get_access_token(as_dict=False)
-sp = Spotify(auth=token)
+if not token:
+    # Pokud token neexistuje nebo je neplatný, provedeme autorizaci
+    auth_url = auth_manager.get_authorize_url()
+    print(f"Prosím otevřete tento odkaz v prohlížeči: {auth_url}")
+
+    # Po otevření URL a přihlášení získáme token
+    token = auth_manager.get_access_token(as_dict=False)
+    print("✅ Úspěšně autorizováno! Token byl uložen do cache.")
+
+# Vytvoření Spotify clienta
+sp = Spotify(auth_manager=auth_manager)
 
 # ========== USER MAP ==========
 try:
