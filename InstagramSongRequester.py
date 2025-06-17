@@ -6,8 +6,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from instagrapi import Client
+from instagrapi.exceptions import ClientError, ClientConnectionError, ClientLoginRequired
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
+from requests.exceptions import RequestException
 
 # ========== ENVIRONMENT ==========
 load_dotenv()
@@ -62,29 +64,48 @@ def update_post_time(user):
     c.execute("REPLACE INTO cooldowns (user, last_time) VALUES (?, ?)", (user, datetime.now().isoformat()))
     conn.commit()
 
-# ========== INSTAGRAM LOGIN ==========
-cl = Client()
 
-def save_session():
+# ========== INSTAGRAM CLIENT SETUP ==========
+def create_instagram_client():
+    cl = Client()
+    # Configure client for better stability
+    cl.delay_range = [1, 3]  # Random delay between requests
+    cl.request_timeout = 30  # Increased timeout
+    cl.set_user_agent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if os.path.exists(SESSION_FILE):
+                with open(SESSION_FILE, "r") as f:
+                    session_settings = json.load(f)
+                cl.set_settings(session_settings)
+                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+            else:
+                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+                save_session(cl)
+            return cl
+        except (ClientError, ClientConnectionError, ClientLoginRequired) as e:
+            print(f"Login attempt {attempt + 1} failed: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(10)
+            if os.path.exists(SESSION_FILE):
+                os.remove(SESSION_FILE)
+
+
+def save_session(client):
     with open(SESSION_FILE, "w") as f:
-        json.dump(cl.get_settings(), f)
+        json.dump(client.get_settings(), f)
 
-def load_session():
-    with open(SESSION_FILE, "r") as f:
-        cl.set_settings(json.load(f))
 
 try:
-    if os.path.exists(SESSION_FILE):
-        load_session()
-        cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-    else:
-        cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-        save_session()
-except Exception:
-    cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-    save_session()
-
-BOT_USER_ID = cl.user_id
+    cl = create_instagram_client()
+    BOT_USER_ID = cl.user_id
+except Exception as e:
+    print(f"Failed to initialize Instagram client: {e}")
+    exit(1)
 
 # ========== SPOTIFY LOGIN ==========
 sp = Spotify(auth_manager=SpotifyOAuth(
@@ -95,14 +116,28 @@ sp = Spotify(auth_manager=SpotifyOAuth(
 ))
 
 # ========== USER MAP ==========
-try:
-    thread = cl.direct_thread(GROUP_THREAD_ID)
-    user_map = {u.pk: u.username for u in thread.users}
-except Exception as e:
-    print(f"[ERROR] Nepodařilo se načíst thread: {e}")
-    user_map = {}
+def load_user_map():
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            thread = cl.direct_thread(GROUP_THREAD_ID)
+            return {u.pk: u.username for u in thread.users}
+        except (ClientError, ClientConnectionError) as e:
+            print(f"Attempt {attempt + 1} to load thread failed: {e}")
+            if attempt == max_retries - 1:
+                return {}
+            time.sleep(10 * (attempt + 1))  # Exponential backoff
+        except Exception as e:
+            print(f"Error loading user map: {e}")
+            return {}
 
-# ========== UTIL ==========
+
+user_map = load_user_map()
+if not user_map:
+    print("Warning: Could not load user map, will use user IDs instead")
+
+
+# ========== UTIL FUNCTIONS ==========
 def extract_spotify_link(text):
     match = re.search(r'(https?://open\.spotify\.com/track/\S+)', text)
     return match.group(1) if match else None
@@ -141,9 +176,25 @@ def handle_admin_command(msg, username):
 
 # ========== MAIN LOOP ==========
 print("🚀 Bot je aktivní a naslouchá...")
+last_successful_request = time.time()
+
 while True:
     try:
-        messages = cl.direct_messages(thread_id=GROUP_THREAD_ID, amount=1)
+        # Check if we need to wait due to rate limiting
+        if time.time() - last_successful_request > 3600:  # 1 hour since last success
+            print("Long delay since last success, resetting session...")
+            cl = create_instagram_client()
+
+        try:
+            messages = cl.direct_messages(thread_id=GROUP_THREAD_ID, amount=1)
+            last_successful_request = time.time()
+        except (ClientError, ClientConnectionError, RequestException) as e:
+            if "500" in str(e) or "502" in str(e) or "503" in str(e) or "504" in str(e):
+                print(f"Instagram server error ({e}), waiting 60 seconds...")
+                time.sleep(60)
+                continue
+            raise
+
         if not messages:
             time.sleep(2)
             continue
@@ -168,7 +219,6 @@ while True:
 
         print(f"[DEBUG] Zpráva od @{username}: {text}")
 
-        # NEW: upozornění pro sdílenou hudbu
         if msg.item_type == "music":
             cl.direct_send(
                 f"@{username}: 🎵 Zpráva vypadá jako sdílená hudba. "
@@ -189,7 +239,6 @@ while True:
 
         link = extract_spotify_link(text)
 
-        # NEW: fallback - zkus opravit neúplný odkaz
         if not link and "open.spotify.com" in text.lower():
             link = reconstruct_spotify_link(text)
             if link:
@@ -218,7 +267,11 @@ while True:
             mins = minutes_remaining(username)
             cl.direct_send(f"@{username}: 🕒 Zkus to znovu za {mins} minut.", thread_ids=[GROUP_THREAD_ID])
 
+    except (ClientError, ClientConnectionError, RequestException) as e:
+        print(f"[ERROR] Instagram API error: {e}")
+        time.sleep(60)  # Longer wait for API errors
     except Exception as e:
         print(f"[ERROR] Globální chyba: {e}")
+        time.sleep(10)
 
     time.sleep(2)
