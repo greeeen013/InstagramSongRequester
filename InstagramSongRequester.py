@@ -55,14 +55,27 @@ def can_post(user):
     last_time = datetime.fromisoformat(row[0])
     return datetime.now() - last_time >= timedelta(minutes=DEFAULT_COOLDOWN)
 
+
 def minutes_remaining(user):
     c.execute("SELECT last_time FROM cooldowns WHERE user=?", (user,))
     row = c.fetchone()
     if not row:
         return DEFAULT_COOLDOWN
-    last_time = datetime.fromisoformat(row[0])
-    remaining = DEFAULT_COOLDOWN - int((datetime.now() - last_time).total_seconds() // 60)
-    return max(1, remaining)
+
+    try:
+        last_time = datetime.fromisoformat(row[0])
+        now = datetime.now()
+
+        # Handle case where last_time is in the future
+        if last_time > now:
+            return DEFAULT_COOLDOWN
+
+        time_diff = now - last_time
+        remaining = DEFAULT_COOLDOWN - int(time_diff.total_seconds() // 60)
+        return max(1, remaining)
+    except ValueError:
+        # If date parsing fails, return default
+        return DEFAULT_COOLDOWN
 
 def update_post_time(user):
     c.execute("REPLACE INTO cooldowns (user, last_time) VALUES (?, ?)", (user, datetime.now().isoformat()))
