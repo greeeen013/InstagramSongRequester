@@ -10,6 +10,10 @@ from instagrapi.exceptions import ClientError, ClientConnectionError, ClientLogi
 from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth
 from requests.exceptions import RequestException
+import socket
+import requests
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 
 # ========== ENVIRONMENT ==========
 load_dotenv()
@@ -68,31 +72,28 @@ def update_post_time(user):
 # ========== INSTAGRAM CLIENT SETUP ==========
 def create_instagram_client():
     cl = Client()
-    # Configure client for better stability
-    cl.delay_range = [1, 3]  # Random delay between requests
-    cl.request_timeout = 30  # Increased timeout
-    cl.set_user_agent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            if os.path.exists(SESSION_FILE):
-                with open(SESSION_FILE, "r") as f:
-                    session_settings = json.load(f)
-                cl.set_settings(session_settings)
-                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            else:
-                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-                save_session(cl)
-            return cl
-        except (ClientError, ClientConnectionError, ClientLoginRequired) as e:
-            print(f"Login attempt {attempt + 1} failed: {e}")
-            if attempt == max_retries - 1:
-                raise
-            time.sleep(10)
-            if os.path.exists(SESSION_FILE):
-                os.remove(SESSION_FILE)
+    # Konfigurace retry strategie
+    retry_strategy = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[500, 502, 503, 504]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    cl.session.mount("https://", adapter)
+    cl.session.mount("http://", adapter)
+
+    # Nastavení timeout a delay
+    cl.request_timeout = 60
+    cl.delay_range = [2, 5]
+
+    # Specifické pro Raspberry Pi
+    cl.set_proxy(None)  # Explicitně vypnout proxy
+    cl.set_connect_timeout(30)
+
+    # Zkuste alternativní DNS
+    socket.setdefaulttimeout(30)
+    requests.packages.urllib3.util.connection.HAS_IPV6 = False
 
 
 def save_session(client):
