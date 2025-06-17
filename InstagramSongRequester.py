@@ -134,12 +134,21 @@ except Exception as e:
     exit(1)
 
 # ========== SPOTIFY LOGIN ==========
-sp = Spotify(auth_manager=SpotifyOAuth(
+auth_manager = SpotifyOAuth(
     client_id=SPOTIFY_CLIENT_ID,
     client_secret=SPOTIFY_CLIENT_SECRET,
     redirect_uri=SPOTIFY_REDIRECT_URI,
-    scope="user-modify-playback-state user-read-playback-state"
-))
+    scope="user-modify-playback-state user-read-playback-state",
+    open_browser=False
+)
+
+# Získání URL pro autorizaci
+auth_url = auth_manager.get_authorize_url()
+print(f"Prosím otevřete tento odkaz v prohlížeči: {auth_url}")
+
+# Po ověření získáte token
+token = auth_manager.get_access_token(as_dict=False)
+sp = Spotify(auth=token)
 
 # ========== USER MAP ==========
 def load_user_map():
